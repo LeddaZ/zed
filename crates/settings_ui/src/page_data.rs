@@ -68,7 +68,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
 }
 
 fn general_page() -> SettingsPage {
-    fn general_settings_section() -> [SettingsPageItem; 9] {
+    fn general_settings_section() -> [SettingsPageItem; 8] {
         [
             SettingsPageItem::SectionHeader("General Settings"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -184,30 +184,6 @@ fn general_page() -> SettingsPage {
                     }
                     .unimplemented(),
                 ),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Semantic Tokens",
-                description: "If semantic tokens from language servers should be rendered.",
-                field: Box::new(SettingField {
-                    json_path: Some("semantic_tokens"),
-                    pick: |settings_content| {
-                        settings_content
-                            .project
-                            .all_languages
-                            .defaults
-                            .semantic_tokens
-                            .as_ref()
-                    },
-                    write: |settings_content, value| {
-                        settings_content
-                            .project
-                            .all_languages
-                            .defaults
-                            .semantic_tokens = value;
-                    },
-                }),
                 metadata: None,
                 files: USER,
             }),
@@ -8521,7 +8497,7 @@ fn language_settings_data() -> Box<[SettingsPageItem]> {
 /// LanguageSettings items that should be included in the "Languages & Tools" page
 /// not the "Editor" page
 fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
-    fn lsp_section() -> [SettingsPageItem; 5] {
+    fn lsp_section() -> [SettingsPageItem; 7] {
         [
             SettingsPageItem::SectionHeader("LSP"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -8602,6 +8578,44 @@ fn non_editor_language_settings_data() -> Box<[SettingsPageItem]> {
                 }),
                 metadata: None,
                 files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Semantic Tokens",
+                description: "Controls how semantic tokens from language servers are used for syntax highlighting. When \"combined\", LSP tokens augment tree-sitter. When \"full\", LSP tokens replace tree-sitter entirely.",
+                field: Box::new(SettingField {
+                    json_path: Some("languages.$(language).semantic_tokens"),
+                    pick: |settings_content| {
+                        language_settings_field(settings_content, |language| {
+                            language.semantic_tokens.as_ref()
+                        })
+                    },
+                    write: |settings_content, value| {
+                        language_settings_field_mut(settings_content, value, |language, value| {
+                            language.semantic_tokens = value;
+                        })
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "LSP Folding Ranges",
+                description: "When enabled, use folding ranges from the language server instead of indent-based folding.",
+                field: Box::new(SettingField {
+                    json_path: Some("languages.$(language).lsp_folding_ranges"),
+                    pick: |settings_content| {
+                        language_settings_field(settings_content, |language| {
+                            language.lsp_folding_ranges.as_ref()
+                        })
+                    },
+                    write: |settings_content, value| {
+                        language_settings_field_mut(settings_content, value, |language, value| {
+                            language.lsp_folding_ranges = value;
+                        })
+                    },
+                }),
+                metadata: None,
+                files: USER | PROJECT,
             }),
         ]
     }

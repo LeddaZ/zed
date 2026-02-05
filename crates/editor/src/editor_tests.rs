@@ -28082,7 +28082,7 @@ async fn test_document_colors(cx: &mut TestAppContext) {
         .set_request_handler::<lsp::request::DocumentColor, _, _>(move |_, _| async move {
             panic!("Should not be called");
         });
-    cx.executor().advance_clock(FETCH_COLORS_DEBOUNCE_TIMEOUT);
+    cx.executor().advance_clock(LSP_REQUEST_DEBOUNCE_TIMEOUT);
     color_request_handle.next().await.unwrap();
     cx.run_until_parked();
     assert_eq!(
@@ -28209,7 +28209,7 @@ async fn test_document_colors(cx: &mut TestAppContext) {
             })
         })
         .unwrap();
-    cx.executor().advance_clock(FETCH_COLORS_DEBOUNCE_TIMEOUT);
+    cx.executor().advance_clock(LSP_REQUEST_DEBOUNCE_TIMEOUT);
     cx.run_until_parked();
     let editor = workspace
         .update(cx, |workspace, _, cx| {
@@ -28263,7 +28263,7 @@ async fn test_document_colors(cx: &mut TestAppContext) {
     });
     save.await.unwrap();
 
-    cx.executor().advance_clock(FETCH_COLORS_DEBOUNCE_TIMEOUT);
+    cx.executor().advance_clock(LSP_REQUEST_DEBOUNCE_TIMEOUT);
     empty_color_request_handle.next().await.unwrap();
     cx.run_until_parked();
     assert_eq!(

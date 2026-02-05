@@ -10,6 +10,7 @@
 //!
 //! Most of the interesting work happens at the local layer, as bulk of the complexity is with managing the lifecycle of language servers. The actual implementation of the LSP protocol is handled by [`lsp`] crate.
 pub mod clangd_ext;
+pub(super) mod folding_ranges;
 pub mod json_language_server_ext;
 pub mod log_store;
 pub mod lsp_ext_command;
@@ -3852,6 +3853,7 @@ pub struct BufferLspData {
     document_colors: Option<DocumentColorData>,
     code_lens: Option<CodeLensData>,
     semantic_tokens: Option<SemanticTokensData>,
+    folding_ranges: Option<FoldingRangeData>,
     inlay_hints: BufferInlayHints,
     lsp_requests: HashMap<LspKey, HashMap<LspRequestId, Task<()>>>,
     chunk_lsp_requests: HashMap<LspKey, HashMap<RowChunk, LspRequestId>>,
@@ -3870,6 +3872,7 @@ impl BufferLspData {
             document_colors: None,
             code_lens: None,
             semantic_tokens: None,
+            folding_ranges: None,
             inlay_hints: BufferInlayHints::new(buffer, cx),
             lsp_requests: HashMap::default(),
             chunk_lsp_requests: HashMap::default(),
@@ -3894,6 +3897,11 @@ impl BufferLspData {
                 .latest_invalidation_requests
                 .remove(&for_server);
         }
+
+        if let Some(folding_ranges) = &mut self.folding_ranges {
+            folding_ranges.ranges.remove(&for_server);
+            folding_ranges.cache_version += 1;
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -3910,6 +3918,20 @@ pub struct DocumentColors {
 
 type DocumentColorTask = Shared<Task<std::result::Result<DocumentColors, Arc<anyhow::Error>>>>;
 type CodeLensTask = Shared<Task<std::result::Result<Option<Vec<CodeAction>>, Arc<anyhow::Error>>>>;
+type FoldingRangeTask = Shared<Task<std::result::Result<FoldingRanges, Arc<anyhow::Error>>>>;
+
+#[derive(Debug, Default, Clone)]
+pub struct FoldingRanges {
+    pub ranges: Vec<Range<Anchor>>,
+    pub cache_version: Option<usize>,
+}
+
+#[derive(Debug, Default)]
+struct FoldingRangeData {
+    ranges: HashMap<LanguageServerId, Vec<Range<Anchor>>>,
+    cache_version: usize,
+    ranges_update: Option<(Global, FoldingRangeTask)>,
+}
 
 #[derive(Debug, Default)]
 struct DocumentColorData {
@@ -9209,6 +9231,18 @@ impl LspStore {
                 )
                 .await?;
             }
+            Request::GetFoldingRanges(get_folding_ranges) => {
+                Self::query_lsp_locally::<GetFoldingRanges>(
+                    lsp_store,
+                    server_id,
+                    sender_id,
+                    lsp_request_id,
+                    get_folding_ranges,
+                    None,
+                    &mut cx,
+                )
+                .await?;
+            }
             Request::GetHover(get_hover) => {
                 let position = get_hover.position.clone().and_then(deserialize_anchor);
                 Self::query_lsp_locally::<GetHover>(
@@ -13019,6 +13053,17 @@ impl LspStore {
                     });
                     notify_server_capabilities_updated(&server, cx);
                 }
+                "textDocument/foldingRange" => {
+                    let options = parse_register_capabilities(reg)?;
+                    let provider = match options {
+                        OneOf::Left(value) => lsp::FoldingRangeProviderCapability::Simple(value),
+                        OneOf::Right(caps) => caps,
+                    };
+                    server.update_capabilities(|capabilities| {
+                        capabilities.folding_range_provider = Some(provider);
+                    });
+                    notify_server_capabilities_updated(&server, cx);
+                }
                 _ => log::warn!("unhandled capability registration: {reg:?}"),
             }
         }
@@ -13213,6 +13258,12 @@ impl LspStore {
                 "textDocument/documentColor" => {
                     server.update_capabilities(|capabilities| {
                         capabilities.color_provider = None;
+                    });
+                    notify_server_capabilities_updated(&server, cx);
+                }
+                "textDocument/foldingRange" => {
+                    server.update_capabilities(|capabilities| {
+                        capabilities.folding_range_provider = None;
                     });
                     notify_server_capabilities_updated(&server, cx);
                 }

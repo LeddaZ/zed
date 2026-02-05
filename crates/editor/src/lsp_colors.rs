@@ -13,8 +13,9 @@ use ui::{App, Context, Window};
 use util::post_inc;
 
 use crate::{
-    DisplayPoint, Editor, EditorSettings, EditorSnapshot, FETCH_COLORS_DEBOUNCE_TIMEOUT,
-    InlaySplice, RangeToAnchorExt, editor_settings::DocumentColorsRenderMode, inlays::Inlay,
+    DisplayPoint, Editor, EditorSettings, EditorSnapshot, InlaySplice,
+    LSP_REQUEST_DEBOUNCE_TIMEOUT, RangeToAnchorExt, editor_settings::DocumentColorsRenderMode,
+    inlays::Inlay,
 };
 
 #[derive(Debug)]
@@ -178,7 +179,7 @@ impl Editor {
 
         self.refresh_colors_task = cx.spawn(async move |editor, cx| {
             cx.background_executor()
-                .timer(FETCH_COLORS_DEBOUNCE_TIMEOUT)
+                .timer(LSP_REQUEST_DEBOUNCE_TIMEOUT)
                 .await;
 
             let Some(all_colors_task) = editor

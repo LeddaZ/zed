@@ -30,6 +30,7 @@ mod jsx_tag_auto_close;
 mod linked_editing_ranges;
 mod lsp_colors;
 mod lsp_ext;
+mod lsp_folding_ranges;
 mod mouse_context_menu;
 pub mod movement;
 mod persistence;
@@ -246,7 +247,7 @@ pub const SELECTION_HIGHLIGHT_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis
 pub(crate) const CODE_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const FORMAT_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SCROLL_CENTER_TOP_BOTTOM_DEBOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
-pub const FETCH_COLORS_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(150);
+pub const LSP_REQUEST_DEBOUNCE_TIMEOUT: Duration = Duration::from_millis(150);
 
 pub(crate) const EDIT_PREDICTION_KEY_CONTEXT: &str = "edit_prediction";
 pub(crate) const EDIT_PREDICTION_CONFLICT_KEY_CONTEXT: &str = "edit_prediction_conflict";
@@ -1327,6 +1328,8 @@ pub struct Editor {
     colors: Option<LspColorData>,
     post_scroll_update: Task<()>,
     refresh_colors_task: Task<()>,
+    use_lsp_folding_ranges: bool,
+    refresh_folding_ranges_task: Task<()>,
     inlay_hints: Option<LspInlayHintData>,
     folding_newlines: Task<()>,
     select_next_is_case_sensitive: Option<bool>,
@@ -2550,6 +2553,8 @@ impl Editor {
             pull_diagnostics_task: Task::ready(()),
             colors: None,
             refresh_colors_task: Task::ready(()),
+            use_lsp_folding_ranges: false,
+            refresh_folding_ranges_task: Task::ready(()),
             inlay_hints: None,
             next_color_inlay_id: 0,
             post_scroll_update: Task::ready(()),
@@ -2638,6 +2643,7 @@ impl Editor {
                                 .update_in(cx, |editor, window, cx| {
                                     editor.register_visible_buffers(cx);
                                     editor.refresh_colors_for_visible_range(None, window, cx);
+                                    editor.refresh_folding_ranges(None, window, cx);
                                     editor.refresh_inlay_hints(
                                         InlayHintRefreshReason::NewLinesShown,
                                         cx,
@@ -2730,6 +2736,7 @@ impl Editor {
             editor.minimap =
                 editor.create_minimap(EditorSettings::get_global(cx).minimap, window, cx);
             editor.colors = Some(LspColorData::new(cx));
+            editor.use_lsp_folding_ranges = true;
             editor.inlay_hints = Some(LspInlayHintData::new(inlay_hint_settings));
 
             if let Some(buffer) = multi_buffer.read(cx).as_singleton() {
@@ -23928,8 +23935,9 @@ impl Editor {
                     self.tasks
                         .retain(|(task_buffer_id, _), _| task_buffer_id != buffer_id);
                     self.semantic_token_state.invalidate_buffer(buffer_id);
-                    self.display_map.update(cx, |display_map, _| {
+                    self.display_map.update(cx, |display_map, cx| {
                         display_map.invalidate_semantic_highlights(*buffer_id);
+                        display_map.clear_lsp_folding_ranges(*buffer_id, cx);
                     });
                 }
                 jsx_tag_auto_close::refresh_enabled_in_any_buffer(self, multibuffer, cx);
@@ -24174,6 +24182,10 @@ impl Editor {
 
             if language_settings_changed || accents_changed {
                 self.colorize_brackets(true, cx);
+            }
+
+            if language_settings_changed {
+                self.clear_disabled_lsp_folding_ranges(window, cx);
             }
 
             if let Some(inlay_splice) = self.colors.as_mut().and_then(|colors| {
@@ -25169,6 +25181,7 @@ impl Editor {
         }
         self.refresh_colors_for_visible_range(for_buffer, window, cx);
         self.update_semantic_tokens(for_buffer, None, cx);
+        self.refresh_folding_ranges(for_buffer, window, cx);
     }
 
     fn register_visible_buffers(&mut self, cx: &mut Context<Self>) {
