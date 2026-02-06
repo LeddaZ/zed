@@ -13,7 +13,7 @@
 | 7: Move `download_server_binary` out of `http_client`, make `archive` depend on `fs` | ✅ Done |
 | 8: Refactor `node_runtime` to use `Fs` abstraction | ✅ Done |
 | 9: Move `download_binary` from `http_client` to `archive` | ✅ Done |
-| 10: Tests | Not started |
+| 10: Tests | ✅ Done |
 
 ## Summary
 
