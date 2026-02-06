@@ -1,5 +1,4 @@
 pub mod arc_cow;
-pub mod archive;
 pub mod command;
 pub mod fs;
 pub mod markdown;

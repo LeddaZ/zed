@@ -723,12 +723,13 @@ impl WasmHost {
     }
 
     pub fn writeable_path_from_extension(&self, id: &Arc<str>, path: &Path) -> Result<PathBuf> {
-        let extension_work_dir = self.work_dir.join(id.as_ref());
-        let path = normalize_path(&extension_work_dir.join(path));
+        let work_dir = archive::ArchiveDir::new(self.work_dir.join(id.as_ref()));
+        let path = normalize_path(&work_dir.path().join(path));
         anyhow::ensure!(
-            path.starts_with(&extension_work_dir),
+            path.starts_with(work_dir.path()),
             "cannot write to path {path:?}",
         );
+        work_dir.ensure_contains(&path)?;
         Ok(path)
     }
 }

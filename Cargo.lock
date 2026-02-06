@@ -724,6 +724,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "archive"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "async-fs",
+ "async-tar",
+ "async_zip",
+ "fs",
+ "futures 0.3.31",
+ "http_client",
+ "log",
+ "sha2",
+ "smol",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4523,9 +4542,8 @@ name = "dap"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compression",
+ "archive",
  "async-pipe",
- "async-tar",
  "async-trait",
  "client",
  "collections",
@@ -4570,6 +4588,7 @@ name = "dap_adapters"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "archive",
  "async-trait",
  "collections",
  "dap",
@@ -6076,6 +6095,7 @@ name = "extension_host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "archive",
  "async-compression",
  "async-tar",
  "async-trait",
@@ -6556,7 +6576,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ashpd",
- "async-tar",
  "async-trait",
  "cocoa 0.26.0",
  "collections",
@@ -7981,9 +8000,6 @@ name = "http_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compression",
- "async-fs",
- "async-tar",
  "bytes 1.11.1",
  "derive_more 0.99.20",
  "futures 0.3.31",
@@ -7994,8 +8010,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "sha2",
- "tempfile",
  "url",
  "util",
 ]
@@ -9221,9 +9235,8 @@ name = "languages"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compression",
+ "archive",
  "async-fs",
- "async-tar",
  "async-trait",
  "chrono",
  "collections",
@@ -10546,10 +10559,10 @@ name = "node_runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compression",
+ "archive",
  "async-std",
- "async-tar",
  "async-trait",
+ "fs",
  "futures 0.3.31",
  "http_client",
  "log",
@@ -12718,6 +12731,7 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "archive",
  "askpass",
  "async-trait",
  "base64 0.22.1",
@@ -12799,6 +12813,7 @@ dependencies = [
  "askpass",
  "clap",
  "client",
+ "fs",
  "futures 0.3.31",
  "gpui",
  "http_client",
@@ -18383,7 +18398,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-fs",
- "async_zip",
  "collections",
  "command-fds",
  "dirs 4.0.0",
@@ -18415,7 +18429,6 @@ dependencies = [
  "unicase",
  "url",
  "util_macros",
- "walkdir",
  "which 6.0.3",
 ]
 

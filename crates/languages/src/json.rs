@@ -1,6 +1,5 @@
 use anyhow::{Context as _, Result, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
+use archive::ArchiveDir;
 use async_trait::async_trait;
 use collections::HashMap;
 use futures::StreamExt;
@@ -16,10 +15,7 @@ use project::lsp_store::language_server_settings;
 use semver::Version;
 use serde_json::{Value, json};
 use settings::SettingsLocation;
-use smol::{
-    fs::{self},
-    io::BufReader,
-};
+use smol::fs::{self};
 use std::{
     borrow::Cow,
     env::consts,
@@ -30,8 +26,8 @@ use std::{
 };
 use task::{TaskTemplate, TaskTemplates, VariableName};
 use util::{
-    ResultExt, archive::extract_zip, fs::remove_matching, maybe, merge_json_value_into,
-    paths::PathStyle, rel_path::RelPath,
+    ResultExt, fs::remove_matching, maybe, merge_json_value_into, paths::PathStyle,
+    rel_path::RelPath,
 };
 
 use crate::PackageJsonData;
@@ -422,12 +418,12 @@ impl LspInstaller for NodeVersionAdapter {
                 .get(&version.url, Default::default(), true)
                 .await
                 .context("downloading release")?;
+            let archive_dir =
+                ArchiveDir::create(&destination_container_path, &*delegate.fs()).await?;
             if version.url.ends_with(".zip") {
-                extract_zip(&destination_container_path, response.body_mut()).await?;
+                archive_dir.extract_zip(response.body_mut()).await?;
             } else if version.url.ends_with(".tar.gz") {
-                let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-                let archive = Archive::new(decompressed_bytes);
-                archive.unpack(&destination_container_path).await?;
+                archive_dir.extract_tar_gz(response.body_mut()).await?;
             }
 
             fs::copy(

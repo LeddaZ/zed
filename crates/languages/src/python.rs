@@ -1,5 +1,6 @@
 use anyhow::{Context as _, ensure};
 use anyhow::{Result, anyhow};
+use archive::ArchiveDir;
 use async_trait::async_trait;
 use collections::HashMap;
 use futures::future::BoxFuture;
@@ -37,7 +38,8 @@ use util::fs::{make_file_executable, remove_matching};
 use util::paths::PathStyle;
 use util::rel_path::RelPath;
 
-use http_client::github_download::{GithubBinaryMetadata, download_server_binary};
+use crate::GithubBinaryMetadata;
+use archive::download_binary;
 use parking_lot::Mutex;
 use std::str::FromStr;
 use std::{
@@ -343,7 +345,7 @@ impl LspInstaller for TyLspAdapter {
         } = latest_version;
         let destination_path = container_dir.join(format!("ty-{name}"));
 
-        async_fs::create_dir_all(&destination_path).await?;
+        let archive_dir = ArchiveDir::create(&destination_path, &*delegate.fs()).await?;
 
         let server_path = match Self::GITHUB_ASSET_KIND {
             AssetKind::TarGz | AssetKind::Gz => destination_path
@@ -359,7 +361,7 @@ impl LspInstaller for TyLspAdapter {
         };
 
         let metadata_path = destination_path.with_extension("metadata");
-        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path)
+        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path, &*delegate.fs())
             .await
             .ok();
         if let Some(metadata) = metadata {
@@ -392,23 +394,23 @@ impl LspInstaller for TyLspAdapter {
             }
         }
 
-        download_server_binary(
-            &*delegate.http_client(),
-            &url,
-            expected_digest.as_deref(),
-            &destination_path,
-            Self::GITHUB_ASSET_KIND,
-        )
-        .await?;
+        let file =
+            download_binary(&*delegate.http_client(), &url, expected_digest.as_deref()).await?;
+        match Self::GITHUB_ASSET_KIND {
+            AssetKind::TarGz => archive_dir.extract_tar_gz(file).await?,
+            AssetKind::Gz => unreachable!(),
+            #[cfg(not(windows))]
+            AssetKind::Zip => archive_dir.extract_seekable_zip(file).await?,
+            #[cfg(windows)]
+            AssetKind::Zip => archive_dir.extract_zip(file).await?,
+        }
         make_file_executable(&server_path).await?;
         remove_matching(&container_dir, |path| path != destination_path).await;
-        GithubBinaryMetadata::write_to_file(
-            &GithubBinaryMetadata {
-                metadata_version: 1,
-                digest: expected_digest,
-            },
-            &metadata_path,
-        )
+        GithubBinaryMetadata {
+            metadata_version: 1,
+            digest: expected_digest,
+        }
+        .write_to_file(&metadata_path, &*delegate.fs())
         .await?;
 
         Ok(LanguageServerBinary {
@@ -2527,7 +2529,7 @@ impl LspInstaller for RuffLspAdapter {
         };
 
         let metadata_path = destination_path.with_extension("metadata");
-        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path)
+        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path, &*delegate.fs())
             .await
             .ok();
         if let Some(metadata) = metadata {
@@ -2560,23 +2562,24 @@ impl LspInstaller for RuffLspAdapter {
             }
         }
 
-        download_server_binary(
-            &*delegate.http_client(),
-            &url,
-            expected_digest.as_deref(),
-            &destination_path,
-            Self::GITHUB_ASSET_KIND,
-        )
-        .await?;
+        let file =
+            download_binary(&*delegate.http_client(), &url, expected_digest.as_deref()).await?;
+        let archive_dir = ArchiveDir::create(&destination_path, &*delegate.fs()).await?;
+        match Self::GITHUB_ASSET_KIND {
+            AssetKind::TarGz => archive_dir.extract_tar_gz(file).await?,
+            AssetKind::Gz => unreachable!(),
+            #[cfg(not(windows))]
+            AssetKind::Zip => archive_dir.extract_seekable_zip(file).await?,
+            #[cfg(windows)]
+            AssetKind::Zip => archive_dir.extract_zip(file).await?,
+        }
         make_file_executable(&server_path).await?;
         remove_matching(&container_dir, |path| path != destination_path).await;
-        GithubBinaryMetadata::write_to_file(
-            &GithubBinaryMetadata {
-                metadata_version: 1,
-                digest: expected_digest,
-            },
-            &metadata_path,
-        )
+        GithubBinaryMetadata {
+            metadata_version: 1,
+            digest: expected_digest,
+        }
+        .write_to_file(&metadata_path, &*delegate.fs())
         .await?;
 
         Ok(LanguageServerBinary {

@@ -1,9 +1,11 @@
+use crate::GithubBinaryMetadata;
 use anyhow::{Context as _, Result, bail};
+use archive::ArchiveDir;
+use archive::download_binary;
 use async_trait::async_trait;
 use futures::StreamExt;
 use gpui::{App, AsyncApp};
-use http_client::github::{AssetKind, GitHubLspBinaryVersion, latest_github_release};
-use http_client::github_download::{GithubBinaryMetadata, download_server_binary};
+use http_client::github::{GitHubLspBinaryVersion, latest_github_release};
 pub use language::*;
 use lsp::{InitializeParams, LanguageServerBinary, LanguageServerName};
 use project::lsp_store::clangd_ext;
@@ -89,7 +91,7 @@ impl LspInstaller for CLspAdapter {
         };
 
         let metadata_path = version_dir.join("metadata");
-        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path)
+        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path, &*delegate.fs())
             .await
             .ok();
         if let Some(metadata) = metadata {
@@ -121,22 +123,19 @@ impl LspInstaller for CLspAdapter {
                 return Ok(binary);
             }
         }
-        download_server_binary(
-            &*delegate.http_client(),
-            &url,
-            expected_digest.as_deref(),
-            &container_dir,
-            AssetKind::Zip,
-        )
-        .await?;
+        let file =
+            download_binary(&*delegate.http_client(), &url, expected_digest.as_deref()).await?;
+        let archive_dir = ArchiveDir::create(&container_dir, &*delegate.fs()).await?;
+        #[cfg(not(windows))]
+        archive_dir.extract_seekable_zip(file).await?;
+        #[cfg(windows)]
+        archive_dir.extract_zip(file).await?;
         remove_matching(&container_dir, |entry| entry != version_dir).await;
-        GithubBinaryMetadata::write_to_file(
-            &GithubBinaryMetadata {
-                metadata_version: 1,
-                digest: expected_digest,
-            },
-            &metadata_path,
-        )
+        GithubBinaryMetadata {
+            metadata_version: 1,
+            digest: expected_digest,
+        }
+        .write_to_file(&metadata_path, &*delegate.fs())
         .await?;
 
         Ok(binary)

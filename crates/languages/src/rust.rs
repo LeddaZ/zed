@@ -1,4 +1,6 @@
+use crate::GithubBinaryMetadata;
 use anyhow::{Context as _, Result};
+use archive::{ArchiveDir, download_binary, extract_gz};
 use async_trait::async_trait;
 use collections::HashMap;
 use futures::StreamExt;
@@ -6,7 +8,6 @@ use futures::lock::OwnedMutexGuard;
 use gpui::{App, AppContext, AsyncApp, SharedString, Task};
 use http_client::github::AssetKind;
 use http_client::github::{GitHubLspBinaryVersion, latest_github_release};
-use http_client::github_download::{GithubBinaryMetadata, download_server_binary};
 pub use language::*;
 use lsp::{InitializeParams, LanguageServerBinary, LanguageServerBinaryOptions};
 use project::lsp_store::rust_analyzer_ext::CARGO_DIAGNOSTICS_SOURCE_NAME;
@@ -721,7 +722,7 @@ impl LspInstaller for RustLspAdapter {
         };
 
         let metadata_path = destination_path.with_extension("metadata");
-        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path)
+        let metadata = GithubBinaryMetadata::read_from_file(&metadata_path, &*delegate.fs())
             .await
             .ok();
         if let Some(metadata) = metadata {
@@ -754,23 +755,34 @@ impl LspInstaller for RustLspAdapter {
             }
         }
 
-        download_server_binary(
-            &*delegate.http_client(),
-            &url,
-            expected_digest.as_deref(),
-            &destination_path,
-            Self::GITHUB_ASSET_KIND,
-        )
-        .await?;
+        let file =
+            download_binary(&*delegate.http_client(), &url, expected_digest.as_deref()).await?;
+        match Self::GITHUB_ASSET_KIND {
+            AssetKind::TarGz => {
+                let archive_dir = ArchiveDir::create(&destination_path, &*delegate.fs()).await?;
+                archive_dir.extract_tar_gz(file).await?;
+            }
+            AssetKind::Gz => {
+                extract_gz(&destination_path, &url, file).await?;
+            }
+            #[cfg(not(windows))]
+            AssetKind::Zip => {
+                let archive_dir = ArchiveDir::create(&destination_path, &*delegate.fs()).await?;
+                archive_dir.extract_seekable_zip(file).await?;
+            }
+            #[cfg(windows)]
+            AssetKind::Zip => {
+                let archive_dir = ArchiveDir::create(&destination_path, &*delegate.fs()).await?;
+                archive_dir.extract_zip(file).await?;
+            }
+        }
         make_file_executable(&server_path).await?;
         remove_matching(&container_dir, |path| path != destination_path).await;
-        GithubBinaryMetadata::write_to_file(
-            &GithubBinaryMetadata {
-                metadata_version: 1,
-                digest: expected_digest,
-            },
-            &metadata_path,
-        )
+        GithubBinaryMetadata {
+            metadata_version: 1,
+            digest: expected_digest,
+        }
+        .write_to_file(&metadata_path, &*delegate.fs())
         .await?;
 
         Ok(LanguageServerBinary {

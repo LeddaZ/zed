@@ -26,7 +26,6 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 use std::mem::MaybeUninit;
 
-use async_tar::Archive;
 use futures::{AsyncRead, Stream, StreamExt, future::BoxFuture};
 use git::repository::{GitRepository, RealGitRepository};
 use is_executable::IsExecutable;
@@ -93,11 +92,6 @@ pub trait Fs: Send + Sync {
         &self,
         path: &Path,
         content: Pin<&mut (dyn AsyncRead + Send)>,
-    ) -> Result<()>;
-    async fn extract_tar_file(
-        &self,
-        path: &Path,
-        content: Archive<Pin<&mut (dyn AsyncRead + Send)>>,
     ) -> Result<()>;
     async fn copy_file(&self, source: &Path, target: &Path, options: CopyOptions) -> Result<()>;
     async fn rename(&self, source: &Path, target: &Path, options: RenameOptions) -> Result<()>;
@@ -560,15 +554,6 @@ impl Fs for RealFs {
             .await
             .with_context(|| format!("Failed to create file at {:?}", path))?;
         futures::io::copy(content, &mut file).await?;
-        Ok(())
-    }
-
-    async fn extract_tar_file(
-        &self,
-        path: &Path,
-        content: Archive<Pin<&mut (dyn AsyncRead + Send)>>,
-    ) -> Result<()> {
-        content.unpack(path).await?;
         Ok(())
     }
 
@@ -2369,25 +2354,6 @@ impl Fs for FakeFs {
         let mut bytes = Vec::new();
         content.read_to_end(&mut bytes).await?;
         self.write_file_internal(path, bytes, true)?;
-        Ok(())
-    }
-
-    async fn extract_tar_file(
-        &self,
-        path: &Path,
-        content: Archive<Pin<&mut (dyn AsyncRead + Send)>>,
-    ) -> Result<()> {
-        let mut entries = content.entries()?;
-        while let Some(entry) = entries.next().await {
-            let mut entry = entry?;
-            if entry.header().entry_type().is_file() {
-                let path = path.join(entry.path()?.as_ref());
-                let mut bytes = Vec::new();
-                entry.read_to_end(&mut bytes).await?;
-                self.create_dir(path.parent().unwrap()).await?;
-                self.write_file_internal(&path, bytes, true)?;
-            }
-        }
         Ok(())
     }
 

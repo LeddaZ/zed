@@ -12,6 +12,7 @@ members = [
     "crates/agent_ui_v2",
     "crates/ai_onboarding",
     "crates/anthropic",
+    "crates/archive",
     "crates/askpass",
     "crates/assets",
     "crates/assistant_text_thread",
@@ -258,6 +259,7 @@ agent_settings = { path = "crates/agent_settings" }
 agent_servers = { path = "crates/agent_servers" }
 ai_onboarding = { path = "crates/ai_onboarding" }
 anthropic = { path = "crates/anthropic" }
+archive = { path = "crates/archive" }
 askpass = { path = "crates/askpass" }
 assets = { path = "crates/assets" }
 assistant_text_thread = { path = "crates/assistant_text_thread" }

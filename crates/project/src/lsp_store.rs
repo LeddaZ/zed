@@ -14538,6 +14538,10 @@ impl LspAdapterDelegate for LocalLspAdapterDelegate {
         self.http_client.clone()
     }
 
+    fn fs(&self) -> Arc<dyn Fs> {
+        self.fs.clone()
+    }
+
     fn worktree_id(&self) -> WorktreeId {
         self.worktree.id()
     }
@@ -14563,7 +14567,8 @@ impl LspAdapterDelegate for LocalLspAdapterDelegate {
         let node_modules_directory = local_package_directory.join("node_modules");
 
         if let Some(version) =
-            read_package_installed_version(node_modules_directory.clone(), package_name).await?
+            read_package_installed_version(node_modules_directory.clone(), package_name, &*self.fs)
+                .await?
         {
             return Ok(Some((node_modules_directory, version)));
         }
@@ -14586,7 +14591,8 @@ impl LspAdapterDelegate for LocalLspAdapterDelegate {
             PathBuf::from(String::from_utf8_lossy(&output.stdout).to_string());
 
         if let Some(version) =
-            read_package_installed_version(global_node_modules.clone(), package_name).await?
+            read_package_installed_version(global_node_modules.clone(), package_name, &*self.fs)
+                .await?
         {
             return Ok(Some((global_node_modules, version)));
         }

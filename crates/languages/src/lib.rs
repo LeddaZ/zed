@@ -1,4 +1,4 @@
-use anyhow::Context as _;
+use anyhow::{Context as _, Result};
 use gpui::{App, SharedString, UpdateGlobal};
 use node_runtime::NodeRuntime;
 use project::Fs;
@@ -7,6 +7,7 @@ use rust::CargoManifestProvider;
 use rust_embed::RustEmbed;
 use settings::{SemanticTokenRules, SettingsStore};
 use smol::stream::StreamExt;
+use std::path::Path;
 use std::{str, sync::Arc};
 use util::{ResultExt, asset_str};
 
@@ -34,6 +35,32 @@ mod vtsls;
 mod yaml;
 
 pub(crate) use package_json::{PackageJson, PackageJsonData};
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+pub(crate) struct GithubBinaryMetadata {
+    pub metadata_version: u64,
+    pub digest: Option<String>,
+}
+
+impl GithubBinaryMetadata {
+    pub async fn read_from_file(metadata_path: &Path, fs: &dyn Fs) -> Result<GithubBinaryMetadata> {
+        let metadata_content = fs
+            .load(metadata_path)
+            .await
+            .with_context(|| format!("reading metadata file at {metadata_path:?}"))?;
+        serde_json::from_str(&metadata_content)
+            .with_context(|| format!("parsing metadata file at {metadata_path:?}"))
+    }
+
+    pub async fn write_to_file(&self, metadata_path: &Path, fs: &dyn Fs) -> Result<()> {
+        let metadata_content = serde_json::to_string(self)
+            .with_context(|| format!("serializing metadata for {metadata_path:?}"))?;
+        fs.write(metadata_path, metadata_content.as_bytes())
+            .await
+            .with_context(|| format!("writing metadata file at {metadata_path:?}"))?;
+        Ok(())
+    }
+}
 
 #[derive(RustEmbed)]
 #[folder = "src/"]

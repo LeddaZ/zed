@@ -15,7 +15,7 @@ use anyhow::Result;
 use collections::HashMap;
 use fs::Fs;
 use gpui::{App, AppContext as _, Context, Entity, Task};
-use util::{ResultExt, archive::extract_zip, paths::PathStyle, rel_path::RelPath};
+use util::{ResultExt, paths::PathStyle, rel_path::RelPath};
 
 pub(crate) struct YarnPathStore {
     temp_dirs: HashMap<Arc<Path>, tempfile::TempDir>,
@@ -133,6 +133,9 @@ fn zip_path(path: &Path) -> Option<&Path> {
 async fn dump_zip(path: Arc<Path>, fs: Arc<dyn Fs>) -> Result<tempfile::TempDir> {
     let dir = tempfile::tempdir()?;
     let contents = fs.load_bytes(&path).await?;
-    extract_zip(dir.path(), futures::io::Cursor::new(contents)).await?;
+    archive::ArchiveDir::create(dir.path(), &*fs)
+        .await?
+        .extract_zip(futures::io::Cursor::new(contents))
+        .await?;
     Ok(dir)
 }

@@ -1,11 +1,9 @@
 use anyhow::{Context as _, Result, anyhow};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
+use archive::ArchiveDir;
 use async_trait::async_trait;
 use collections::HashMap;
 pub use dap_types::{StartDebuggingRequestArguments, StartDebuggingRequestArgumentsRequest};
 use fs::Fs;
-use futures::io::BufReader;
 use gpui::{AsyncApp, SharedString};
 pub use http_client::{HttpClient, github::latest_github_release};
 use language::{LanguageName, LanguageToolchainStore};
@@ -24,7 +22,7 @@ use std::{
     sync::Arc,
 };
 use task::{DebugScenario, TcpArgumentsTemplate, ZedDebugConfig};
-use util::{archive::extract_zip, rel_path::RelPath};
+use util::rel_path::RelPath;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DapStatus {
@@ -285,11 +283,9 @@ pub async fn download_adapter_from_github(
         return Ok(version_path);
     }
 
-    if !adapter_path.exists() {
-        fs.create_dir(adapter_path.as_path())
-            .await
-            .context("Failed creating adapter path")?;
-    }
+    let archive_dir = ArchiveDir::create(version_path.as_path(), &*fs)
+        .await
+        .context("Failed creating version path")?;
 
     log::debug!(
         "Downloading adapter {} from {}",
@@ -312,16 +308,15 @@ pub async fn download_adapter_from_github(
     delegate.output_to_console("Download complete".to_owned());
     match file_type {
         DownloadedFileType::GzipTar => {
-            let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-            let archive = Archive::new(decompressed_bytes);
-            archive.unpack(&version_path).await?;
+            archive_dir.extract_tar_gz(response.body_mut()).await?;
         }
         DownloadedFileType::Zip | DownloadedFileType::Vsix => {
             let zip_path = version_path.with_extension("zip");
             let mut file = File::create(&zip_path).await?;
             futures::io::copy(response.body_mut(), &mut file).await?;
             let file = File::open(&zip_path).await?;
-            extract_zip(&version_path, file)
+            archive_dir
+                .extract_zip(file)
                 .await
                 // we cannot check the status as some adapter include files with names that trigger `Illegal byte sequence`
                 .inspect_err(|e| log::warn!("ZIP extraction error: {}. Ignoring...", e))

@@ -1,13 +1,12 @@
 use anyhow::{Context as _, Result, anyhow, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
-use futures::{AsyncReadExt, FutureExt as _, channel::oneshot, future::Shared};
+use archive::ArchiveDir;
+use fs::{Fs, RemoveOptions};
+use futures::{FutureExt as _, channel::oneshot, future::Shared};
 use http_client::{Host, HttpClient, Url};
 use log::Level;
 use semver::Version;
 use serde::Deserialize;
-use smol::io::BufReader;
-use smol::{fs, lock::Mutex};
+use smol::lock::Mutex;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::{
@@ -20,7 +19,6 @@ use std::{
     sync::Arc,
 };
 use util::ResultExt;
-use util::archive::extract_zip;
 
 const NODE_CA_CERTS_ENV_VAR: &str = "NODE_EXTRA_CA_CERTS";
 
@@ -51,6 +49,7 @@ pub enum VersionStrategy<'a> {
 pub struct NodeRuntime(Arc<Mutex<NodeRuntimeState>>);
 
 struct NodeRuntimeState {
+    fs: Option<Arc<dyn Fs>>,
     http: Arc<dyn HttpClient>,
     instance: Option<Box<dyn NodeRuntimeTrait>>,
     last_options: Option<NodeBinaryOptions>,
@@ -60,11 +59,13 @@ struct NodeRuntimeState {
 
 impl NodeRuntime {
     pub fn new(
+        fs: Arc<dyn Fs>,
         http: Arc<dyn HttpClient>,
         shell_env_loaded: Option<oneshot::Receiver<()>>,
         options: watch::Receiver<Option<NodeBinaryOptions>>,
     ) -> Self {
         NodeRuntime(Arc::new(Mutex::new(NodeRuntimeState {
+            fs: Some(fs),
             http,
             instance: None,
             last_options: None,
@@ -75,6 +76,7 @@ impl NodeRuntime {
 
     pub fn unavailable() -> Self {
         NodeRuntime(Arc::new(Mutex::new(NodeRuntimeState {
+            fs: None,
             http: Arc::new(http_client::BlockedHttpClient),
             instance: None,
             last_options: None,
@@ -108,8 +110,17 @@ impl NodeRuntime {
             return instance.boxed_clone();
         }
 
+        let fs = state.fs.clone();
+
         if let Some((node, npm)) = options.use_paths.as_ref() {
-            let instance = match SystemNodeRuntime::new(node.clone(), npm.clone()).await {
+            let Some(fs) = fs.clone() else {
+                return Box::new(UnavailableNodeRuntime {
+                    error_message: "no filesystem available for Node.js runtime"
+                        .to_string()
+                        .into(),
+                });
+            };
+            let instance = match SystemNodeRuntime::new(node.clone(), npm.clone(), fs).await {
                 Ok(instance) => {
                     log::info!("using Node.js from `node.path` in settings: {:?}", instance);
                     Box::new(instance)
@@ -133,7 +144,14 @@ impl NodeRuntime {
 
         let system_node_error = if options.allow_path_lookup {
             state.shell_env_loaded.clone().await.ok();
-            match SystemNodeRuntime::detect().await {
+            let Some(fs) = fs.clone() else {
+                return Box::new(UnavailableNodeRuntime {
+                    error_message: "no filesystem available for Node.js runtime"
+                        .to_string()
+                        .into(),
+                });
+            };
+            match SystemNodeRuntime::detect(fs).await {
                 Ok(instance) => {
                     log::info!("using Node.js found on PATH: {:?}", instance);
                     state.instance = Some(instance.boxed_clone());
@@ -155,7 +173,14 @@ impl NodeRuntime {
                     "`node.ignore_system_version` is `true` in settings".to_string(),
                 ),
             };
-            match ManagedNodeRuntime::install_if_needed(&state.http).await {
+            let Some(fs) = fs.clone() else {
+                return Box::new(UnavailableNodeRuntime {
+                    error_message: "no filesystem available for Node.js runtime"
+                        .to_string()
+                        .into(),
+                }) as Box<dyn NodeRuntimeTrait>;
+            };
+            match ManagedNodeRuntime::install_if_needed(&state.http, &fs).await {
                 Ok(instance) => {
                     log::log!(
                         log_level,
@@ -319,7 +344,7 @@ impl NodeRuntime {
         // In the case of the local system not having the package installed,
         // or in the instances where we fail to parse package.json data,
         // we attempt to install the package.
-        if fs::metadata(local_executable_path).await.is_err() {
+        if smol::fs::metadata(local_executable_path).await.is_err() {
             return true;
         }
 
@@ -386,6 +411,7 @@ trait NodeRuntimeTrait: Send + Sync {
 
 #[derive(Clone)]
 struct ManagedNodeRuntime {
+    fs: Arc<dyn Fs>,
     installation_path: PathBuf,
 }
 
@@ -402,7 +428,7 @@ impl ManagedNodeRuntime {
     #[cfg(windows)]
     const NPM_PATH: &str = "node_modules/npm/bin/npm-cli.js";
 
-    async fn install_if_needed(http: &Arc<dyn HttpClient>) -> Result<Self> {
+    async fn install_if_needed(http: &Arc<dyn HttpClient>, fs: &Arc<dyn Fs>) -> Result<Self> {
         log::info!("Node runtime install_if_needed");
 
         let os = match consts::OS {
@@ -426,7 +452,7 @@ impl ManagedNodeRuntime {
         let npm_file = node_dir.join(Self::NPM_PATH);
         let node_ca_certs = env::var(NODE_CA_CERTS_ENV_VAR).unwrap_or_else(|_| String::new());
 
-        let valid = if fs::metadata(&node_binary).await.is_ok() {
+        let valid = if fs.is_file(&node_binary).await {
             let result = util::command::new_smol_command(&node_binary)
                 .env(NODE_CA_CERTS_ENV_VAR, node_ca_certs)
                 .arg(npm_file)
@@ -464,8 +490,16 @@ impl ManagedNodeRuntime {
         };
 
         if !valid {
-            _ = fs::remove_dir_all(&node_containing_dir).await;
-            fs::create_dir(&node_containing_dir)
+            fs.remove_dir(
+                &node_containing_dir,
+                RemoveOptions {
+                    recursive: true,
+                    ignore_if_not_exists: true,
+                },
+            )
+            .await
+            .ok();
+            let archive_dir = ArchiveDir::create(&node_containing_dir, &**fs)
                 .await
                 .context("error creating node containing dir")?;
 
@@ -495,21 +529,22 @@ impl ManagedNodeRuntime {
             let body = response.body_mut();
             match archive_type {
                 ArchiveType::TarGz => {
-                    let decompressed_bytes = GzipDecoder::new(BufReader::new(response.body_mut()));
-                    let archive = Archive::new(decompressed_bytes);
-                    archive.unpack(&node_containing_dir).await?;
+                    archive_dir.extract_tar_gz(response.body_mut()).await?;
                 }
-                ArchiveType::Zip => extract_zip(&node_containing_dir, body).await?,
+                ArchiveType::Zip => archive_dir.extract_zip(body).await?,
             }
             log::info!("Extracted Node.js to {}", node_containing_dir.display())
         }
 
         // Note: Not in the `if !valid {}` so we can populate these for existing installations
-        _ = fs::create_dir(node_dir.join("cache")).await;
-        _ = fs::write(node_dir.join("blank_user_npmrc"), []).await;
-        _ = fs::write(node_dir.join("blank_global_npmrc"), []).await;
+        fs.create_dir(&node_dir.join("cache")).await.ok();
+        fs.write(&node_dir.join("blank_user_npmrc"), &[]).await.ok();
+        fs.write(&node_dir.join("blank_global_npmrc"), &[])
+            .await
+            .ok();
 
         anyhow::Ok(ManagedNodeRuntime {
+            fs: fs.clone(),
             installation_path: node_dir,
         })
     }
@@ -594,13 +629,10 @@ impl NodeRuntimeTrait for ManagedNodeRuntime {
         let npm_file = self.installation_path.join(Self::NPM_PATH);
 
         anyhow::ensure!(
-            smol::fs::metadata(&node_binary).await.is_ok(),
+            self.fs.is_file(&node_binary).await,
             "missing node binary file"
         );
-        anyhow::ensure!(
-            smol::fs::metadata(&npm_file).await.is_ok(),
-            "missing npm file"
-        );
+        anyhow::ensure!(self.fs.is_file(&npm_file).await, "missing npm file");
 
         let command_args = build_npm_command_args(
             Some(&npm_file),
@@ -625,21 +657,38 @@ impl NodeRuntimeTrait for ManagedNodeRuntime {
         local_package_directory: &Path,
         name: &str,
     ) -> Result<Option<Version>> {
-        read_package_installed_version(local_package_directory.join("node_modules"), name).await
+        read_package_installed_version(
+            local_package_directory.join("node_modules"),
+            name,
+            &*self.fs,
+        )
+        .await
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SystemNodeRuntime {
+    fs: Arc<dyn Fs>,
     node: PathBuf,
     npm: PathBuf,
     global_node_modules: PathBuf,
     scratch_dir: PathBuf,
 }
 
+impl std::fmt::Debug for SystemNodeRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SystemNodeRuntime")
+            .field("node", &self.node)
+            .field("npm", &self.npm)
+            .field("global_node_modules", &self.global_node_modules)
+            .field("scratch_dir", &self.scratch_dir)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SystemNodeRuntime {
     const MIN_VERSION: semver::Version = Version::new(22, 0, 0);
-    async fn new(node: PathBuf, npm: PathBuf) -> Result<Self> {
+    async fn new(node: PathBuf, npm: PathBuf, fs: Arc<dyn Fs>) -> Result<Self> {
         let output = util::command::new_smol_command(&node)
             .arg("--version")
             .output()
@@ -664,10 +713,11 @@ impl SystemNodeRuntime {
         }
 
         let scratch_dir = paths::data_dir().join("node");
-        fs::create_dir(&scratch_dir).await.ok();
-        fs::create_dir(scratch_dir.join("cache")).await.ok();
+        fs.create_dir(&scratch_dir).await.ok();
+        fs.create_dir(&scratch_dir.join("cache")).await.ok();
 
         let mut this = Self {
+            fs,
             node,
             npm,
             global_node_modules: PathBuf::default(),
@@ -680,10 +730,10 @@ impl SystemNodeRuntime {
         Ok(this)
     }
 
-    async fn detect() -> std::result::Result<Self, DetectError> {
+    async fn detect(fs: Arc<dyn Fs>) -> std::result::Result<Self, DetectError> {
         let node = which::which("node").map_err(DetectError::NotInPath)?;
         let npm = which::which("npm").map_err(DetectError::NotInPath)?;
-        Self::new(node, npm).await.map_err(DetectError::Other)
+        Self::new(node, npm, fs).await.map_err(DetectError::Other)
     }
 }
 
@@ -766,7 +816,12 @@ impl NodeRuntimeTrait for SystemNodeRuntime {
         local_package_directory: &Path,
         name: &str,
     ) -> Result<Option<Version>> {
-        read_package_installed_version(local_package_directory.join("node_modules"), name).await
+        read_package_installed_version(
+            local_package_directory.join("node_modules"),
+            name,
+            &*self.fs,
+        )
+        .await
         // todo: allow returning a globally installed version (requires callers not to hard-code the path)
     }
 }
@@ -774,17 +829,19 @@ impl NodeRuntimeTrait for SystemNodeRuntime {
 pub async fn read_package_installed_version(
     node_module_directory: PathBuf,
     name: &str,
+    fs: &dyn Fs,
 ) -> Result<Option<Version>> {
     let package_json_path = node_module_directory.join(name).join("package.json");
 
-    let mut file = match fs::File::open(package_json_path).await {
-        Ok(file) => file,
+    let contents = match fs.load(&package_json_path).await {
+        Ok(contents) => contents,
         Err(err) => {
-            if err.kind() == io::ErrorKind::NotFound {
-                return Ok(None);
+            if let Some(io_err) = err.downcast_ref::<io::Error>() {
+                if io_err.kind() == io::ErrorKind::NotFound {
+                    return Ok(None);
+                }
             }
-
-            Err(err)?
+            return Err(err);
         }
     };
 
@@ -793,8 +850,6 @@ pub async fn read_package_installed_version(
         version: Version,
     }
 
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).await?;
     let package_json: PackageJson = serde_json::from_str(&contents)?;
     Ok(Some(package_json.version))
 }

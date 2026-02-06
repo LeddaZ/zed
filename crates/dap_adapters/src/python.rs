@@ -149,10 +149,12 @@ impl PythonDebugAdapter {
             })
             .with_context(|| format!("Did not find a .whl in {download_dir:?}"))?;
 
-        util::archive::extract_zip(
+        archive::ArchiveDir::create(
             &debug_adapters_dir().join(Self::ADAPTER_NAME),
-            File::open(&wheel_path.path()).await?,
+            &*delegate.fs(),
         )
+        .await?
+        .extract_zip(File::open(&wheel_path.path()).await?)
         .await?;
 
         Ok(Arc::from(wheel_path.path()))

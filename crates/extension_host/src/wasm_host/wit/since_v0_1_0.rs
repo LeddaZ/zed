@@ -2,8 +2,8 @@ use crate::wasm_host::{WasmState, wit::ToWasmtimeResult};
 use ::http_client::{AsyncBody, HttpRequestExt};
 use ::settings::{Settings, WorktreeId};
 use anyhow::{Context as _, Result, bail};
+use archive::ArchiveDir;
 use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use extension::{ExtensionLanguageServerProxy, KeyValueStoreDelegate, WorktreeDelegate};
 use futures::{AsyncReadExt, lock::Mutex};
 use futures::{FutureExt as _, io::BufReader};
@@ -18,7 +18,7 @@ use std::{
 };
 use util::paths::PathStyle;
 use util::rel_path::RelPath;
-use util::{archive::extract_zip, fs::make_file_executable, maybe};
+use util::{fs::make_file_executable, maybe};
 use wasmtime::component::{Linker, Resource};
 
 use super::{latest, since_v0_6_0};
@@ -543,14 +543,16 @@ impl ExtensionImports for WasmState {
                 DownloadedFileType::GzipTar => {
                     let body = GzipDecoder::new(body);
                     futures::pin_mut!(body);
-                    self.host
-                        .fs
-                        .extract_tar_file(&destination_path, Archive::new(body))
+                    ArchiveDir::create(&destination_path, &*self.host.fs)
+                        .await?
+                        .extract_tar(body)
                         .await?;
                 }
                 DownloadedFileType::Zip => {
                     futures::pin_mut!(body);
-                    extract_zip(&destination_path, body)
+                    ArchiveDir::create(&destination_path, &*self.host.fs)
+                        .await?
+                        .extract_zip(body)
                         .await
                         .with_context(|| format!("unzipping {path:?} archive"))?;
                 }

@@ -1610,17 +1610,37 @@ impl ExternalAgentServer for LocalCodex {
                                 .digest
                                 .as_deref()
                                 .and_then(|d| d.strip_prefix("sha256:").or(Some(d)));
-                            match ::http_client::github_download::download_server_binary(
-                                &*http,
-                                &asset.browser_download_url,
-                                digest,
-                                &version_dir,
+                            let asset_kind =
                                 if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
                                     AssetKind::Zip
                                 } else {
                                     AssetKind::TarGz
-                                },
-                            )
+                                };
+                            match async {
+                                let file = ::archive::download_binary(
+                                    &*http,
+                                    &asset.browser_download_url,
+                                    digest,
+                                )
+                                .await?;
+                                let archive_dir =
+                                    archive::ArchiveDir::create(&version_dir, &*fs).await?;
+                                match asset_kind {
+                                    AssetKind::TarGz => {
+                                        archive_dir.extract_tar_gz(file).await?;
+                                    }
+                                    AssetKind::Gz => unreachable!(),
+                                    #[cfg(not(windows))]
+                                    AssetKind::Zip => {
+                                        archive_dir.extract_seekable_zip(file).await?;
+                                    }
+                                    #[cfg(windows)]
+                                    AssetKind::Zip => {
+                                        archive_dir.extract_zip(file).await?;
+                                    }
+                                }
+                                anyhow::Ok(())
+                            }
                             .await
                             {
                                 Ok(()) => {
@@ -1867,14 +1887,18 @@ impl ExternalAgentServer for LocalExtensionArchiveAgent {
                 };
 
                 // Download and extract
-                ::http_client::github_download::download_server_binary(
-                    &*http_client,
-                    archive_url,
-                    sha256.as_deref(),
-                    &version_dir,
-                    asset_kind,
-                )
-                .await?;
+                let file =
+                    ::archive::download_binary(&*http_client, archive_url, sha256.as_deref())
+                        .await?;
+                let archive_dir = archive::ArchiveDir::create(&version_dir, &*fs).await?;
+                match asset_kind {
+                    AssetKind::TarGz => archive_dir.extract_tar_gz(file).await?,
+                    AssetKind::Gz => unreachable!(),
+                    #[cfg(not(windows))]
+                    AssetKind::Zip => archive_dir.extract_seekable_zip(file).await?,
+                    #[cfg(windows)]
+                    AssetKind::Zip => archive_dir.extract_zip(file).await?,
+                }
             }
 
             // Validate and resolve cmd path
@@ -2061,14 +2085,18 @@ impl ExternalAgentServer for LocalRegistryArchiveAgent {
                     anyhow::bail!("unsupported archive type in URL: {}", archive_url);
                 };
 
-                ::http_client::github_download::download_server_binary(
-                    &*http_client,
-                    archive_url,
-                    sha256.as_deref(),
-                    &version_dir,
-                    asset_kind,
-                )
-                .await?;
+                let file =
+                    ::archive::download_binary(&*http_client, archive_url, sha256.as_deref())
+                        .await?;
+                let archive_dir = archive::ArchiveDir::create(&version_dir, &*fs).await?;
+                match asset_kind {
+                    AssetKind::TarGz => archive_dir.extract_tar_gz(file).await?,
+                    AssetKind::Gz => unreachable!(),
+                    #[cfg(not(windows))]
+                    AssetKind::Zip => archive_dir.extract_seekable_zip(file).await?,
+                    #[cfg(windows)]
+                    AssetKind::Zip => archive_dir.extract_zip(file).await?,
+                }
             }
 
             let cmd = &target_config.cmd;

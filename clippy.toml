@@ -16,6 +16,9 @@ disallowed-methods = [
     { path = "serde_json::from_reader", reason = "Parsing from a buffer is much slower than first reading the buffer into a Vec/String, see https://github.com/serde-rs/json/issues/160#issuecomment-253446892. Use `serde_json::from_slice` instead." },
     { path = "serde_json_lenient::from_reader", reason = "Parsing from a buffer is much slower than first reading the buffer into a Vec/String, see https://github.com/serde-rs/json/issues/160#issuecomment-253446892, Use `serde_json_lenient::from_slice` instead." },
     { path = "cocoa::foundation::NSString::alloc", reason = "NSString must be autoreleased to avoid memory leaks. Use `ns_string()` helper instead." },
+    { path = "async_tar::Archive::unpack", reason = "Use archive::ArchiveDir::extract_tar instead for path-safe extraction." },
+    { path = "async_zip::base::read::seek::ZipFileReader::new", reason = "Use archive::ArchiveDir::extract_zip instead for path-safe extraction." },
+    { path = "async_zip::base::read::stream::ZipFileReader::new", reason = "Use archive::ArchiveDir::extract_zip instead for path-safe extraction." },
 ]
 disallowed-types = [
     # { path = "std::collections::HashMap", replacement = "collections::HashMap" },

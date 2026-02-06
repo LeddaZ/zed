@@ -4,13 +4,14 @@ use anyhow::anyhow;
 use askpass::EncryptedPassword;
 use clap::Parser;
 use client::{Client, UserStore};
+use fs::RealFs;
 use futures::channel::oneshot;
 use gpui::{AppContext as _, Application};
 use http_client::FakeHttpClient;
 use language::LanguageRegistry;
 use node_runtime::NodeRuntime;
 use project::{
-    Project, RealFs,
+    Project,
     search::{SearchQuery, SearchResult},
 };
 use release_channel::ReleaseChannel;
@@ -131,10 +132,10 @@ fn main() -> Result<(), anyhow::Error> {
         let client = Client::production(cx);
         let http_client = FakeHttpClient::with_200_response();
         let (_, rx) = watch::channel(None);
-        let node = NodeRuntime::new(http_client, None, rx);
+        let fs = Arc::new(RealFs::new(None, cx.background_executor().clone()));
+        let node = NodeRuntime::new(fs.clone(), http_client, None, rx);
         let user_store = cx.new(|cx| UserStore::new(client.clone(), cx));
         let registry = Arc::new(LanguageRegistry::new(cx.background_executor().clone()));
-        let fs = Arc::new(RealFs::new(None, cx.background_executor().clone()));
 
 
 

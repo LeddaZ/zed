@@ -552,8 +552,12 @@ pub fn execute_run(
                 )
             };
 
-            let node_runtime =
-                NodeRuntime::new(http_client.clone(), shell_env_loaded_rx, node_settings_rx);
+            let node_runtime = NodeRuntime::new(
+                fs.clone(),
+                http_client.clone(),
+                shell_env_loaded_rx,
+                node_settings_rx,
+            );
 
             let mut languages = LanguageRegistry::new(cx.background_executor().clone());
             languages.set_language_server_download_dir(paths::languages_dir().clone());

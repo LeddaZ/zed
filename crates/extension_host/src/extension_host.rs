@@ -7,8 +7,6 @@ pub mod wasm_host;
 mod extension_store_test;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use async_compression::futures::bufread::GzipDecoder;
-use async_tar::Archive;
 use client::ExtensionProvides;
 use client::{Client, ExtensionMetadata, GetExtensionsResponse, proto, telemetry::Telemetry};
 use collections::{BTreeMap, BTreeSet, HashSet, btree_map};
@@ -758,9 +756,10 @@ impl ExtensionStore {
                     ));
                 }
             }
-            let decompressed_bytes = GzipDecoder::new(BufReader::new(tar_gz_bytes.as_slice()));
-            let archive = Archive::new(decompressed_bytes);
-            archive.unpack(extension_dir).await?;
+            archive::ArchiveDir::create(&extension_dir, &*fs)
+                .await?
+                .extract_tar_gz(tar_gz_bytes.as_slice())
+                .await?;
             this.update(cx, |this, cx| this.reload(Some(extension_id.clone()), cx))?
                 .await;
 

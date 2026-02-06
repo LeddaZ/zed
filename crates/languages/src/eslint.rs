@@ -1,10 +1,8 @@
 use anyhow::{Context as _, Result};
+use archive::{ArchiveDir, download_binary};
 use async_trait::async_trait;
 use gpui::AsyncApp;
-use http_client::{
-    github::{AssetKind, GitHubLspBinaryVersion, build_asset_url},
-    github_download::download_server_binary,
-};
+use http_client::github::{AssetKind, GitHubLspBinaryVersion, build_asset_url};
 use language::{LspAdapter, LspAdapterDelegate, LspInstaller, Toolchain};
 use lsp::{CodeActionKind, LanguageServerBinary, LanguageServerName, Uri};
 use node_runtime::NodeRuntime;
@@ -97,14 +95,16 @@ impl LspInstaller for EsLintLspAdapter {
         if fs::metadata(&server_path).await.is_err() {
             remove_matching(&container_dir, |_| true).await;
 
-            download_server_binary(
-                &*delegate.http_client(),
-                &version.url,
-                None,
-                &destination_path,
-                Self::GITHUB_ASSET_KIND,
-            )
-            .await?;
+            let file = download_binary(&*delegate.http_client(), &version.url, None).await?;
+            let archive_dir = ArchiveDir::create(&destination_path, &*delegate.fs()).await?;
+            match Self::GITHUB_ASSET_KIND {
+                AssetKind::TarGz => archive_dir.extract_tar_gz(file).await?,
+                AssetKind::Gz => unreachable!(),
+                #[cfg(not(windows))]
+                AssetKind::Zip => archive_dir.extract_seekable_zip(file).await?,
+                #[cfg(windows)]
+                AssetKind::Zip => archive_dir.extract_zip(file).await?,
+            }
 
             let mut dir = fs::read_dir(&destination_path).await?;
             let first = dir.next().await.context("missing first file")??;
